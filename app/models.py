@@ -5,9 +5,10 @@ from flask_login import UserMixin
 from app import login
 from hashlib import md5
 
+#因为followers表只包含两个外键，不包含自己的数据，所以我们直接创建它，不需要把它创建为一个类
 followers = db.Table('followers',
 	db.Column('follower_id', db.Integer, db.ForeignKey('user.id')),
-	db.Column('follower_id', db.Integer, db.ForeignKey('user.id'))
+	db.Column('followed_id', db.Integer, db.ForeignKey('user.id'))
 )
 
 class User(UserMixin, db.Model):
@@ -32,13 +33,16 @@ class User(UserMixin, db.Model):
 		digest = md5(self.email.lower().encode('utf-8')).hexdigest()
 		return 'https://www.gravatar.com/avatar/{}?d=identicon&s={}'.format(digest, size)
 
-	#followed关注等号右边的User，followed表示当前用户关注的所有用户
+	#声明many-to-many关系，followed表示当前用户关注的所有用户
+	#这个关系链接了用户和其他用户，简单点说就是，被这个关系链接的一对用户。左边的用户关注右边的用户。
+	#从左边查询表示查询所有关注的用户，所以用followed表示。从右边查询，表示要查询所有关注该用户的用户，用follower表示。
 	followed = db.relationship(
 		'User', secondary=followers,
 		primaryjoin=(followers.c.follower_id == id),
-		secondaryjoin=(followers.c.follower_id == id),
+		secondaryjoin=(followers.c.followed_id == id),
 		backref=db.backref('followers', lazy='dynamic'), lazy='dynamic')
 
+	#将逻辑代码从view function分离，将它们定义在models类或者其他辅助类或者模块中是很好的做法。这样有助于做单元测试。
 	def follow(self, user):
 		if not self.is_following(user):
 			self.followed.append(user)
@@ -49,8 +53,14 @@ class User(UserMixin, db.Model):
 
 	def is_following(self, user):
 		return self.followed.filter(
-			followers.c.follower_id == user.id).count() > 0
+			followers.c.followed_id == user.id).count() > 0
 
+	def followed_posts(self):
+		followed = Post.query.join(
+			followers, (followers.c.followed_id == Post.user_id)).filter(
+				followers.c.follower_id == self.id)
+		own = Post.query.filter_by(user_id = self.id)
+		return followed.union(own).order_by(Post.timestamp.desc())
 
 class Post(db.Model):
 	id = db.Column(db.Integer, primary_key=True)
